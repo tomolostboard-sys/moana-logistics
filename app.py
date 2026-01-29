@@ -97,16 +97,16 @@ with st.sidebar:
     st.header("📂 IMPORTATION DONNÉES")
     uploaded_file = st.file_uploader("Charger Ventes (Excel ou CSV)", type=['csv', 'xlsx'])
     
-    # Bouton de modèle pour aider le client
+    # Bouton de modèle
     template_data = pd.DataFrame({'jour': [1], 'produit': ['Riz'], 'ventes': [50], 'meteo': [0], 'evenement': [0], 'impact_attendu': [1.0]})
-    st.download_button("📥 Télécharger Modèle CSV", template_data.to_csv(index=False).encode('utf-8'), "modele_moana.csv", "text/csv")
+    st.download_button("📥 Modèle CSV", template_data.to_csv(index=False).encode('utf-8'), "modele_moana.csv", "text/csv")
     
     st.divider()
     st.header("🌦️ EXTERNE")
     flux_direct = st.checkbox("Météo Direct (Papeete)", value=True)
     sim_event = st.checkbox("Campagne Promo", value=False)
 
-# --- PRÉPARATION DES DONNÉES (DEMO OU RÉELLES) ---
+# --- PRÉPARATION DES DONNÉES ---
 produits_catalogue = ['Riz Parfumé 5kg', 'Farine T45', 'Sucre Blanc 1kg']
 
 if uploaded_file is not None:
@@ -118,21 +118,14 @@ if uploaded_file is not None:
         else:
             df_brut = pd.read_csv(uploaded_file, sep=None, engine='python')
 
-        # Mapping intelligent
-        mapping = {
-            'ventes': ['ventes', 'sales', 'qty', 'quantité', 'vendu'],
-            'produit': ['produit', 'item', 'article', 'nom'],
-            'jour': ['jour', 'day', 'date']
-        }
+        mapping = {'ventes': ['ventes', 'sales', 'qty', 'quantité'], 'produit': ['produit', 'item', 'article'], 'jour': ['jour', 'day', 'date']}
         for officiel, synonymes in mapping.items():
             for col in df_brut.columns:
-                if col.lower() in synonymes:
-                    df_brut = df_brut.rename(columns={col: officiel})
+                if col.lower() in synonymes: df_brut = df_brut.rename(columns={col: officiel})
         
         data = df_brut.dropna(subset=['ventes', 'produit'])
         data['ventes'] = pd.to_numeric(data['ventes'], errors='coerce').fillna(0)
         produits_catalogue = data['produit'].unique().tolist()
-        st.sidebar.success("✅ Données chargées !")
     except Exception as e:
         st.sidebar.error(f"Erreur : {e}")
         uploaded_file = None
@@ -145,9 +138,7 @@ if uploaded_file is None:
             'jour': range(1, 31),
             'ventes': [base + np.random.randint(-15, 25) + (i*0.8) for i in range(30)],
             'meteo': [np.random.choice([0, 1]) for _ in range(30)],
-            'evenement': [0]*30,
-            'impact_attendu': [1.5 if sim_event else 1.0]*30,
-            'produit': [prod] * 30
+            'evenement': [0]*30, 'impact_attendu': [1.0]*30, 'produit': [prod] * 30
         })
         all_data.append(p_data)
     data = pd.concat(all_data)
@@ -162,11 +153,10 @@ delai_total = lead_time + retard_bateau
 etat_stocks = []
 
 for prod in produits_catalogue:
-    df_temp = data[data['produit'] == prod]
+    df_temp = data[data['produit'] == prod].copy()
     vitesse = df_temp['ventes'].tail(7).mean()
     seuil_alerte = (vitesse * delai_total) + (np.std(df_temp['ventes']) * 1.96 * np.sqrt(delai_total))
     s_actuel = st.session_state.get(f"in_{prod}", 300)
-    
     statut = "🔴 COMMANDE" if s_actuel < seuil_alerte else "🟢 OK"
     etat_stocks.append({"Produit": prod, "Stock": int(s_actuel), "Seuil": int(seuil_alerte), "Statut": statut})
 
@@ -175,7 +165,17 @@ st.table(pd.DataFrame(etat_stocks))
 # --- ANALYSE DÉTAILLÉE ---
 st.divider()
 choix_produit = st.selectbox("🔍 ANALYSE PAR RÉFÉRENCE", produits_catalogue)
-df_p = data[data['produit'] == choix_produit]
+df_p = data[data['produit'] == choix_produit].copy()
+
+# --- ÉTAPE 13 : DATA GUARD (ANOMALIES) ---
+moyenne = df_p['ventes'].mean()
+std_dev_p = df_p['ventes'].std()
+seuil_max = moyenne + (3 * std_dev_p)
+anomalies = df_p[df_p['ventes'] > seuil_max]
+
+if not anomalies.empty:
+    st.warning(f"⚠️ **DATA GUARD** : {len(anomalies)} pic(s) de vente détecté(s). L'IA a lissé ces valeurs pour la prévision.")
+    df_p.loc[df_p['ventes'] > seuil_max, 'ventes'] = seuil_max
 
 meteo_active = get_tahiti_weather() if flux_direct else 0
 preds = engine_ia_pro(df_p, 21, meteo_active, 1 if sim_event else 0, 1.5 if sim_event else 1.0)
@@ -200,9 +200,9 @@ else:
     c4.success("✅ OK")
 
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=df_p['jour'], y=df_p['ventes'], name="Réel", line=dict(color='#00ffcc', width=4)))
+fig.add_trace(go.Scatter(x=df_p['jour'], y=df_p['ventes'], name="Réel (Lissé)", line=dict(color='#00ffcc', width=4)))
 fig.add_trace(go.Scatter(x=list(range(31, 46)), y=preds[:15], name="IA", line=dict(dash='dot', color='#ff0066', width=4)))
 fig.update_layout(template="plotly_dark", height=400)
 st.plotly_chart(fig, use_container_width=True)
 
-st.caption("© 2026 Moana Logistics | V2.0 Smart Import | tomolostboard-sys")
+st.caption("© 2026 Moana Logistics | V2.1 Data Guard Activated | tomolostboard-sys")
