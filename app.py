@@ -6,9 +6,11 @@ import plotly.graph_objects as go
 from fpdf import FPDF
 import os
 import requests
+from datetime import datetime
 
-# --- CONFIGURATION FICHIER STOCK ---
+# --- CONFIGURATION FICHIERS ---
 DB_FILE = "stocks_db.csv"
+LOG_FILE = "historique_commandes.csv"
 
 # --- SYSTÈME DE SÉCURITÉ ---
 def check_password():
@@ -36,9 +38,8 @@ def check_password():
     else:
         return True
 
-# --- FONCTIONS DE PERSISTANCE ---
+# --- FONCTIONS DE PERSISTANCE & LOGS ---
 def charger_stocks_locaux(produits):
-    """Charge les stocks depuis le CSV ou initialise à 300."""
     if os.path.exists(DB_FILE):
         try:
             df = pd.read_csv(DB_FILE, index_col=0)
@@ -48,75 +49,62 @@ def charger_stocks_locaux(produits):
     return {p: 300 for p in produits}
 
 def sauvegarder_stock(produit, quantite):
-    """Enregistre la modification de stock dans le CSV."""
     stocks = charger_stocks_locaux([])
     stocks[produit] = quantite
     pd.DataFrame.from_dict(stocks, orient='index', columns=['stock']).to_csv(DB_FILE)
 
+def log_commande(produit, quantite):
+    """Inscrit la commande dans le journal de bord."""
+    nouveau_log = pd.DataFrame([{
+        "Date": datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "Produit": produit,
+        "Quantité": int(quantite),
+        "Statut": "Bon Généré"
+    }])
+    if os.path.exists(LOG_FILE):
+        nouveau_log.to_csv(LOG_FILE, mode='a', header=False, index=False)
+    else:
+        nouveau_log.to_csv(LOG_FILE, index=False)
+
 # --- LANCEMENT DE L'APPLICATION ---
 if check_password():
 
-    # --- CONFIGURATION ÉLITE & DESIGN ---
     st.set_page_config(page_title="MOANA LOGISTICS - COMMAND CENTER", layout="wide", page_icon="🌊")
 
+    # --- DESIGN CSS ---
     st.markdown("""
         <style>
-        .main {
-            background: linear-gradient(180deg, #0e1117 0%, #1e2130 100%);
-            color: white;
-        }
-        .stMetric {
-            background-color: rgba(30, 33, 48, 0.7);
-            padding: 20px;
-            border-radius: 15px;
-            border: 1px solid rgba(0, 255, 204, 0.3);
-            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-        }
-        h1 {
-            color: #00ffcc;
-            font-family: 'Helvetica Neue', sans-serif;
-            letter-spacing: 2px;
-            text-transform: uppercase;
-        }
-        .stButton>button {
-            background: linear-gradient(90deg, #00ffcc 0%, #0099ff 100%);
-            color: black;
-            border: none;
-            font-weight: bold;
-            transition: 0.3s;
-        }
-        .stButton>button:hover {
-            transform: scale(1.02);
-            box-shadow: 0 0 15px #00ffcc;
-        }
+        .main { background: linear-gradient(180deg, #0e1117 0%, #1e2130 100%); color: white; }
+        .stMetric { background-color: rgba(30, 33, 48, 0.7); padding: 20px; border-radius: 15px; border: 1px solid rgba(0, 255, 204, 0.3); }
+        h1 { color: #00ffcc; font-family: 'Helvetica Neue', sans-serif; letter-spacing: 2px; text-transform: uppercase; }
+        .stButton>button { background: linear-gradient(90deg, #00ffcc 0%, #0099ff 100%); color: black; font-weight: bold; }
         </style>
         """, unsafe_allow_html=True)
 
-    # --- FONCTIONS UTILES ---
+    # --- FONCTIONS CŒUR ---
     def get_tahiti_weather():
         try:
             url = "https://api.open-meteo.com/v1/forecast?latitude=-17.53&longitude=-149.56&current_weather=true"
             response = requests.get(url, timeout=5).json()
-            code = response['current_weather']['weathercode']
-            return 1 if code >= 51 else 0
+            return 1 if response['current_weather']['weathercode'] >= 51 else 0
         except: return 0
 
     def generer_pdf(produit, quantite, delai):
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Arial", 'B', 16)
-        pdf.cell(200, 10, "BON DE COMMANDE AUTOMATISE", ln=True, align='C')
+        pdf.cell(200, 10, "BON DE COMMANDE AUTOMATISE MOANA", ln=True, align='C')
         pdf.ln(10)
         pdf.set_font("Arial", size=12)
-        pdf.cell(200, 10, f"Emetteur : Moana Logistics AI System", ln=True)
-        pdf.cell(200, 10, f"Date : {pd.Timestamp.now().strftime('%d/%m/%Y')}", ln=True)
-        pdf.ln(5)
+        pdf.cell(200, 10, f"Date : {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True)
         pdf.cell(200, 10, f"Produit : {produit}", ln=True)
         pdf.cell(200, 10, f"Quantite : {int(quantite)} unites", ln=True)
-        pdf.cell(200, 10, f"Lead Time Total : {delai} jours", ln=True)
         pdf.ln(20)
         pdf.set_font("Arial", 'I', 10)
-        pdf.cell(200, 10, "Document genere par l'intelligence artificielle Moana Logistics.", ln=True)
+        pdf.cell(200, 10, "Document certifie par le systeme Moana AI.", ln=True)
+        
+        # Action de Log
+        log_commande(produit, quantite)
         return pdf.output(dest='S').encode('latin-1')
 
     def engine_ia_pro(data, horizon, weather, event, calendar_impact):
@@ -134,153 +122,97 @@ if check_password():
             last_sales = p 
         return preds
 
-    # --- SIDEBAR & DESIGN CUSTOM ---
+    # --- SIDEBAR ---
     with st.sidebar:
-        st.markdown("""
-            <div style='text-align: center;'>
-                <h1 style='color: #00ffcc; font-size: 1.5em;'>MOANA 🚢</h1>
-                <p style='color: #888; font-size: 0.8em; letter-spacing: 2px;'>LOGISTICS SOLUTIONS</p>
-            </div>
-        """, unsafe_allow_html=True)
-        
-        st.divider()
-        
+        st.markdown("<h1 style='color: #00ffcc;'>MOANA 🚢</h1>", unsafe_allow_html=True)
         with st.expander("⚙️ PARAMÈTRES RÉSEAU", expanded=True):
             lead_time = st.number_input("Délai Livraison (Jours)", value=10)
-            retard_bateau = st.slider("Retard Bateau (Jours)", 0, 15, 0)
+            retard_bateau = st.slider("Retard Bateau", 0, 15, 0)
             service_level = st.select_slider("Taux de Service", options=[0.80, 0.90, 0.95, 0.99], value=0.95)
         
-        st.divider()
-        st.header("📂 DONNÉES")
-        uploaded_file = st.file_uploader("Ventes (Excel/CSV)", type=['csv', 'xlsx'])
-        
-        template_data = pd.DataFrame({'jour': [1], 'produit': ['Riz'], 'ventes': [50], 'meteo': [0], 'evenement': [0], 'impact_attendu': [1.0]})
-        st.download_button("📥 Modèle Import", template_data.to_csv(index=False).encode('utf-8'), "modele_moana.csv", "text/csv")
-        
-        st.divider()
-        with st.expander("🌦️ FACTEURS EXTERNES"):
-            flux_direct = st.checkbox("Météo Direct (Papeete)", value=True)
-            sim_event = st.checkbox("Campagne Promo", value=False)
+        uploaded_file = st.file_uploader("📂 Charger Ventes", type=['csv', 'xlsx'])
         
         if st.button("🚪 Se déconnecter"):
             del st.session_state["password_correct"]
             st.rerun()
 
-    # --- PRÉPARATION DES DONNÉES ---
+    # --- GESTION DES DONNÉES ---
     produits_catalogue = ['Riz Parfumé 5kg', 'Farine T45', 'Sucre Blanc 1kg']
-
     if uploaded_file is not None:
-        try:
-            if uploaded_file.name.endswith('.xlsx'):
-                excel = pd.ExcelFile(uploaded_file)
-                onglet = st.sidebar.selectbox("Choisir l'onglet", excel.sheet_names)
-                df_brut = pd.read_excel(uploaded_file, sheet_name=onglet)
-            else:
-                df_brut = pd.read_csv(uploaded_file, sep=None, engine='python')
-
-            mapping = {'ventes': ['ventes', 'sales', 'qty', 'quantité'], 'produit': ['produit', 'item', 'article'], 'jour': ['jour', 'day', 'date']}
-            for officiel, synonymes in mapping.items():
-                for col in df_brut.columns:
-                    if col.lower() in synonymes: df_brut = df_brut.rename(columns={col: officiel})
-            
-            data = df_brut.dropna(subset=['ventes', 'produit'])
-            data['ventes'] = pd.to_numeric(data['ventes'], errors='coerce').fillna(0)
-            produits_catalogue = data['produit'].unique().tolist()
-            st.sidebar.success("✅ Données chargées")
-        except Exception as e:
-            st.sidebar.error(f"Erreur : {e}")
-            uploaded_file = None
-
-    if uploaded_file is None:
+        if uploaded_file.name.endswith('.xlsx'):
+            data = pd.read_excel(uploaded_file)
+        else:
+            data = pd.read_csv(uploaded_file, sep=None, engine='python')
+        # Mapping automatique
+        for col in data.columns:
+            if col.lower() in ['ventes', 'qty']: data = data.rename(columns={col: 'ventes'})
+            if col.lower() in ['produit', 'item']: data = data.rename(columns={col: 'produit'})
+            if col.lower() in ['jour', 'date']: data = data.rename(columns={col: 'jour'})
+        produits_catalogue = data['produit'].unique().tolist()
+    else:
         all_data = []
         for prod in produits_catalogue:
-            base = np.random.randint(40, 80)
-            p_data = pd.DataFrame({
-                'jour': range(1, 31),
-                'ventes': [base + np.random.randint(-15, 25) + (i*0.8) for i in range(30)],
-                'meteo': [np.random.choice([0, 1]) for _ in range(30)],
-                'evenement': [0]*30, 'impact_attendu': [1.0]*30, 'produit': [prod] * 30
-            })
+            p_data = pd.DataFrame({'jour': range(1, 31), 'ventes': np.random.randint(40, 100, 30), 'meteo': [0]*30, 'evenement': [0]*30, 'impact_attendu': [1.0]*30, 'produit': [prod]*30})
             all_data.append(p_data)
         data = pd.concat(all_data)
 
-    # --- CHARGEMENT STOCKS PERSISTANTS ---
     if 'stocks_moana' not in st.session_state:
         st.session_state['stocks_moana'] = charger_stocks_locaux(produits_catalogue)
 
-    # --- INTERFACE PRINCIPALE ---
-    st.title("🌊 MOANA COMMAND CENTER")
-    st.write(f"🌐 **Logistics Intelligence System** | Polynésie Française")
+    # --- NAVIGATION PAR ONGLETS ---
+    tab_command, tab_history = st.tabs(["🚀 COMMAND CENTER", "📜 JOURNAL DE BORD"])
 
-    # --- RADAR GLOBAL ---
-    st.subheader("📡 RADAR DES STOCKS")
-    delai_total = lead_time + retard_bateau
-    etat_stocks = []
-
-    for prod in produits_catalogue:
-        df_temp = data[data['produit'] == prod].copy()
-        vitesse = df_temp['ventes'].tail(7).mean()
-        seuil_alerte = (vitesse * delai_total) + (np.std(df_temp['ventes']) * 1.96 * np.sqrt(delai_total))
+    with tab_command:
+        st.title("🌊 MOANA COMMAND CENTER")
         
-        # Récupération depuis la mémoire persistante
-        s_actuel = st.session_state['stocks_moana'].get(prod, 300)
+        # Radar
+        delai_total = lead_time + retard_bateau
         
-        statut = "🔴 COMMANDE" if s_actuel < seuil_alerte else "🟢 OK"
-        etat_stocks.append({"Produit": prod, "Stock": int(s_actuel), "Seuil": int(seuil_alerte), "Statut": statut})
+        choix_produit = st.selectbox("🔍 Sélectionner une référence", produits_catalogue)
+        df_p = data[data['produit'] == choix_produit].copy()
 
-    st.table(pd.DataFrame(etat_stocks))
+        # Persistance du Stock
+        val_init = int(st.session_state['stocks_moana'].get(choix_produit, 300))
+        stock_physique = st.number_input(f"Stock Réel : {choix_produit}", value=val_init)
+        if stock_physique != val_init:
+            st.session_state['stocks_moana'][choix_produit] = stock_physique
+            sauvegarder_stock(choix_produit, stock_physique)
+            st.toast("Stock sauvegardé !", icon="💾")
 
-    # --- ANALYSE DÉTAILLÉE ---
-    st.divider()
-    choix_produit = st.selectbox("🔍 ANALYSE PAR RÉFÉRENCE", produits_catalogue)
-    df_p = data[data['produit'] == choix_produit].copy()
+        # Calcul IA
+        with st.spinner('IA en cours...'):
+            preds = engine_ia_pro(df_p, 21, get_tahiti_weather(), 0, 1.0)
+        
+        reorder_point = sum(preds[:delai_total]) + (df_p['ventes'].std() * 1.96 * np.sqrt(delai_total))
 
-    # --- DATA GUARD (ANOMALIES) ---
-    moyenne_p = df_p['ventes'].mean()
-    std_dev_p = df_p['ventes'].std()
-    seuil_max = moyenne_p + (3 * std_dev_p)
-    anomalies = df_p[df_p['ventes'] > seuil_max]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("POINT D'ALERTE", f"{int(reorder_point)} u.")
+        c2.metric("PRÉVISION ({}) J".format(delai_total), f"{int(sum(preds[:delai_total]))} u.")
+        
+        if stock_physique < reorder_point:
+            qte = int(reorder_point - stock_physique)
+            c3.error(f"🚨 CMD : {qte}")
+            st.download_button("📥 Générer & Logger le Bon", generer_pdf(choix_produit, qte, delai_total), f"Moana_{choix_produit}.pdf")
+        else:
+            c3.success("✅ STOCK OK")
 
-    if not anomalies.empty:
-        st.warning(f"⚠️ **DATA GUARD** : Pic(s) détecté(s). Lissage activé.")
-        df_p.loc[df_p['ventes'] > seuil_max, 'ventes'] = seuil_max
+        # Graphique
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df_p['jour'], y=df_p['ventes'], name="Historique", line=dict(color='#00ffcc', width=3)))
+        fig.add_trace(go.Scatter(x=list(range(31, 46)), y=preds[:15], name="Futur IA", line=dict(dash='dot', color='#ff0066', width=3)))
+        fig.update_layout(template="plotly_dark", height=400)
+        st.plotly_chart(fig, use_container_width=True)
 
-    meteo_active = get_tahiti_weather() if flux_direct else 0
-    with st.spinner('Analyse IA...'):
-        preds = engine_ia_pro(df_p, 21, meteo_active, 1 if sim_event else 0, 1.5 if sim_event else 1.0)
-
-    total_pred = sum(preds[:delai_total])
-    safety_stock = np.std(df_p['ventes']) * {0.80: 1.28, 0.90: 1.64, 0.95: 1.96, 0.99: 2.33}[service_level] * np.sqrt(delai_total)
-    reorder_point = total_pred + safety_stock
-
-    st.markdown(f"## 📦 Focus : {choix_produit}")
-    
-    # Entrée de stock avec sauvegarde automatique
-    valeur_init = int(st.session_state['stocks_moana'].get(choix_produit, 300))
-    stock_physique = st.number_input(f"Stock Réel : {choix_produit}", value=valeur_init, key=f"input_{choix_produit}")
-    
-    if stock_physique != valeur_init:
-        st.session_state['stocks_moana'][choix_produit] = stock_physique
-        sauvegarder_stock(choix_produit, stock_physique)
-        st.toast(f"✅ Stock {choix_produit} mis à jour !", icon="💾")
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("BESOIN PRÉVU", f"{int(total_pred)} u.")
-    c2.metric("SÉCURITÉ", f"{int(safety_stock)} u.")
-    c3.metric("POINT D'ALERTE", f"{int(reorder_point)} u.")
-
-    if stock_physique < reorder_point:
-        qte = int(reorder_point - stock_physique)
-        c4.error(f"🚨 CMD : {qte}")
-        st.download_button(f"📥 Générer Bon {choix_produit}", generer_pdf(choix_produit, qte, delai_total), f"Moana_{choix_produit}.pdf")
-    else:
-        c4.success("✅ STOCK OPTIMAL")
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_p['jour'], y=df_p['ventes'], name="Historique", line=dict(color='#00ffcc', width=4)))
-    fig.add_trace(go.Scatter(x=list(range(31, 46)), y=preds[:15], name="Prévision IA", line=dict(dash='dot', color='#ff0066', width=4)))
-    fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0))
-    st.plotly_chart(fig, use_container_width=True)
+    with tab_history:
+        st.subheader("📋 Historique des Commandes")
+        if os.path.exists(LOG_FILE):
+            df_log = pd.read_csv(LOG_FILE)
+            st.dataframe(df_log.sort_index(ascending=False), use_container_width=True)
+            if st.button("🗑️ Effacer l'historique"):
+                os.remove(LOG_FILE)
+                st.rerun()
+        else:
+            st.info("Aucune commande dans le journal pour le moment.")
 
     st.divider()
-    st.caption("© 2026 Moana Logistics | V3.1 Persistance Edition | tomolostboard-sys")
+    st.caption("© 2026 Moana Logistics | V3.2 The Beast Edition | tomolostboard-sys")
