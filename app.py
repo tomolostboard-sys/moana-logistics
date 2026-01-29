@@ -129,7 +129,8 @@ for p in data['produit'].unique():
         safety_stock = z_score * std_dev * np.sqrt(lead_time)
         reorder_point = total_pred + safety_stock
         
-        stock_actuel = 350 # Valeur à lier à ton stock réel
+        # On déplace la gestion du stock dans la colonne pour chaque produit
+        stock_actuel = st.number_input(f"Stock Physique Actuel ({p})", value=350)
         
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("DEMANDE PRÉVUE", f"{int(total_pred)} un.")
