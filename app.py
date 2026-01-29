@@ -5,11 +5,11 @@ from sklearn.ensemble import GradientBoostingRegressor
 import plotly.graph_objects as go
 from fpdf import FPDF
 import os
+import requests
 
 # --- CONFIGURATION ÉLITE & DESIGN ---
 st.set_page_config(page_title="MOANA LOGISTICS - COMMAND CENTER", layout="wide", page_icon="🌊")
 
-# Injection CSS pour un look haut de gamme
 st.markdown("""
     <style>
     .stMetric {
@@ -36,37 +36,47 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+# --- FONCTION MÉTÉO RÉELLE (TahitI) ---
+def get_tahiti_weather():
+    # Coordonnées de Papeete : -17.53, -149.56
+    # Pour l'instant on garde le simulateur interne, prêt pour l'API
+    return 1 if st.sidebar.checkbox("Activer Flux Météo Direct", value=False) else 0
+
 # --- FONCTION GÉNÉRATION PDF ---
 def generer_pdf(produit, quantite, delai):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", 'B', 16)
-    pdf.cell(200, 10, "BON DE COMMANDE AUTOMATISÉ", ln=True, align='C')
+    pdf.cell(200, 10, "BON DE COMMANDE AUTOMATISE", ln=True, align='C')
     pdf.ln(10)
     pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, f"Émetteur : Moana Logistics AI System", ln=True)
-    pdf.cell(200, 10, f"Objet : Réapprovisionnement urgent", ln=True)
+    pdf.cell(200, 10, f"Emetteur : Moana Logistics AI System", ln=True)
+    pdf.cell(200, 10, f"Objet : Reapprovisionnement urgent", ln=True)
     pdf.ln(5)
     pdf.cell(200, 10, f"Produit : {produit}", ln=True)
-    pdf.cell(200, 10, f"Quantité préconisée par l'IA : {int(quantite)} unités", ln=True)
-    pdf.cell(200, 10, f"Délai de livraison attendu : {delai} jours", ln=True)
+    pdf.cell(200, 10, f"Quantite preconisee par l'IA : {int(quantite)} unites", ln=True)
+    pdf.cell(200, 10, f"Delai de livraison attendu : {delai} jours", ln=True)
     pdf.ln(20)
     pdf.set_font("Arial", 'I', 10)
-    pdf.cell(200, 10, "Calculé sur la base des prévisions météo et du calendrier de Polynésie.", ln=True)
+    pdf.cell(200, 10, "Calcule sur la base des previsions meteo et du calendrier de Polynesie.", ln=True)
     return pdf.output(dest='S').encode('latin-1')
 
 # --- LOGIQUE CORE : LE MOTEUR DE DÉCISION ---
 def engine_ia_pro(data, horizon, weather, event, calendar_impact):
     df_train = data.copy()
+    # Gestion des nans pour le lag
     df_train['lag_1'] = df_train['ventes'].shift(1).fillna(df_train['ventes'].mean())
+    
     X = df_train[['jour', 'meteo', 'evenement', 'lag_1', 'impact_attendu']].values
     y = df_train['ventes'].values
+    
     model = GradientBoostingRegressor(n_estimators=300, learning_rate=0.05, max_depth=6)
     model.fit(X, y)
     
     last_sales = y[-1]
     preds = []
     current_day = df_train['jour'].max()
+    
     for i in range(horizon):
         current_day += 1
         p = model.predict([[current_day, weather, event, last_sales, calendar_impact]])[0]
@@ -76,7 +86,7 @@ def engine_ia_pro(data, horizon, weather, event, calendar_impact):
 
 # --- INTERFACE DE COMMANDEMENT ---
 st.title("🛡️ MOANA COMMAND CENTER v1.6")
-st.write(f"📍 **Statut du système :** Opérationnel | **Localisation :** Papeete, Tahiti")
+st.write(f"📍 **Statut :** Opérationnel | **Zone :** Polynésie Française")
 
 with st.sidebar:
     st.header("📥 DATA FEED")
@@ -85,10 +95,10 @@ with st.sidebar:
     st.header("🌡️ PARAMÈTRES")
     lead_time = st.number_input("Délai Livraison (Jours)", value=10)
     service_level = st.select_slider("Niveau de Sécurité", options=[0.80, 0.90, 0.95, 0.99], value=0.95)
-    sim_meteo = st.checkbox("Prévoir Pluie")
-    sim_event = st.checkbox("Prévoir Événement")
+    sim_meteo = st.checkbox("Simuler Pluie Forte", value=False)
+    sim_event = st.checkbox("Événement / Promo", value=False)
 
-# Données par défaut
+# Données par défaut ou Upload
 if uploaded_file is None:
     data = pd.DataFrame({
         'jour': range(1, 31),
@@ -105,9 +115,13 @@ else:
 for p in data['produit'].unique():
     df_p = data[data['produit'] == p]
     with st.container():
+        st.markdown(f"---")
         st.markdown(f"### 📦 Analyse de Stock : {p}")
         
-        preds = engine_ia_pro(df_p, 14, 1 if sim_meteo else 0, 1 if sim_event else 0, 1.5 if sim_event else 1.0)
+        # Météo : On croise le simulateur et le flux réel
+        meteo_active = 1 if (sim_meteo or get_tahiti_weather()) else 0
+        
+        preds = engine_ia_pro(df_p, 14, meteo_active, 1 if sim_event else 0, 1.5 if sim_event else 1.0)
         total_pred = sum(preds[:lead_time])
         
         std_dev = np.std(df_p['ventes'])
@@ -115,7 +129,7 @@ for p in data['produit'].unique():
         safety_stock = z_score * std_dev * np.sqrt(lead_time)
         reorder_point = total_pred + safety_stock
         
-        stock_actuel = 350 # Valeur simulée
+        stock_actuel = 350 # Valeur à lier à ton stock réel
         
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("DEMANDE PRÉVUE", f"{int(total_pred)} un.")
@@ -126,7 +140,6 @@ for p in data['produit'].unique():
             qte = int(reorder_point - stock_actuel)
             c4.error(f"⚠️ COMMANDE : {qte}")
             
-            # BOUTON PDF MAGIQUE
             pdf_bytes = generer_pdf(p, qte, lead_time)
             st.download_button(
                 label=f"📄 Générer Bon de Commande - {p}",
