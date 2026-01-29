@@ -7,11 +7,13 @@ from fpdf import FPDF
 import os
 import requests
 
+# --- CONFIGURATION FICHIER STOCK ---
+DB_FILE = "stocks_db.csv"
+
 # --- SYSTÈME DE SÉCURITÉ ---
 def check_password():
     """Retourne True si l'utilisateur a saisi le bon mot de passe."""
     def password_entered():
-        # Tu peux changer "Moana2026" par le mot de passe de ton choix
         if st.session_state["password"] == "Moana2026":
             st.session_state["password_correct"] = True
             del st.session_state["password"]
@@ -33,6 +35,23 @@ def check_password():
         return False
     else:
         return True
+
+# --- FONCTIONS DE PERSISTANCE ---
+def charger_stocks_locaux(produits):
+    """Charge les stocks depuis le CSV ou initialise à 300."""
+    if os.path.exists(DB_FILE):
+        try:
+            df = pd.read_csv(DB_FILE, index_col=0)
+            return df['stock'].to_dict()
+        except:
+            return {p: 300 for p in produits}
+    return {p: 300 for p in produits}
+
+def sauvegarder_stock(produit, quantite):
+    """Enregistre la modification de stock dans le CSV."""
+    stocks = charger_stocks_locaux([])
+    stocks[produit] = quantite
+    pd.DataFrame.from_dict(stocks, orient='index', columns=['stock']).to_csv(DB_FILE)
 
 # --- LANCEMENT DE L'APPLICATION ---
 if check_password():
@@ -143,7 +162,6 @@ if check_password():
             flux_direct = st.checkbox("Météo Direct (Papeete)", value=True)
             sim_event = st.checkbox("Campagne Promo", value=False)
         
-        # Option de déconnexion
         if st.button("🚪 Se déconnecter"):
             del st.session_state["password_correct"]
             st.rerun()
@@ -186,6 +204,10 @@ if check_password():
             all_data.append(p_data)
         data = pd.concat(all_data)
 
+    # --- CHARGEMENT STOCKS PERSISTANTS ---
+    if 'stocks_moana' not in st.session_state:
+        st.session_state['stocks_moana'] = charger_stocks_locaux(produits_catalogue)
+
     # --- INTERFACE PRINCIPALE ---
     st.title("🌊 MOANA COMMAND CENTER")
     st.write(f"🌐 **Logistics Intelligence System** | Polynésie Française")
@@ -199,7 +221,10 @@ if check_password():
         df_temp = data[data['produit'] == prod].copy()
         vitesse = df_temp['ventes'].tail(7).mean()
         seuil_alerte = (vitesse * delai_total) + (np.std(df_temp['ventes']) * 1.96 * np.sqrt(delai_total))
-        s_actuel = st.session_state.get(f"in_{prod}", 300)
+        
+        # Récupération depuis la mémoire persistante
+        s_actuel = st.session_state['stocks_moana'].get(prod, 300)
+        
         statut = "🔴 COMMANDE" if s_actuel < seuil_alerte else "🟢 OK"
         etat_stocks.append({"Produit": prod, "Stock": int(s_actuel), "Seuil": int(seuil_alerte), "Statut": statut})
 
@@ -217,12 +242,11 @@ if check_password():
     anomalies = df_p[df_p['ventes'] > seuil_max]
 
     if not anomalies.empty:
-        st.warning(f"⚠️ **DATA GUARD** : {len(anomalies)} pic(s) de vente détecté(s). Lissage activé.")
+        st.warning(f"⚠️ **DATA GUARD** : Pic(s) détecté(s). Lissage activé.")
         df_p.loc[df_p['ventes'] > seuil_max, 'ventes'] = seuil_max
 
-    # --- CALCULS AVEC ANIMATION ---
     meteo_active = get_tahiti_weather() if flux_direct else 0
-    with st.spinner('🌊 L\'IA Moana analyse les courants de ventes...'):
+    with st.spinner('Analyse IA...'):
         preds = engine_ia_pro(df_p, 21, meteo_active, 1 if sim_event else 0, 1.5 if sim_event else 1.0)
 
     total_pred = sum(preds[:delai_total])
@@ -230,15 +254,23 @@ if check_password():
     reorder_point = total_pred + safety_stock
 
     st.markdown(f"## 📦 Focus : {choix_produit}")
-    stock_actuel = st.number_input(f"Ajuster Stock Physique : {choix_produit}", value=300, key=f"in_{choix_produit}")
+    
+    # Entrée de stock avec sauvegarde automatique
+    valeur_init = int(st.session_state['stocks_moana'].get(choix_produit, 300))
+    stock_physique = st.number_input(f"Stock Réel : {choix_produit}", value=valeur_init, key=f"input_{choix_produit}")
+    
+    if stock_physique != valeur_init:
+        st.session_state['stocks_moana'][choix_produit] = stock_physique
+        sauvegarder_stock(choix_produit, stock_physique)
+        st.toast(f"✅ Stock {choix_produit} mis à jour !", icon="💾")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("BESOIN PRÉVU", f"{int(total_pred)} u.")
     c2.metric("SÉCURITÉ", f"{int(safety_stock)} u.")
     c3.metric("POINT D'ALERTE", f"{int(reorder_point)} u.")
 
-    if stock_actuel < reorder_point:
-        qte = int(reorder_point - stock_actuel)
+    if stock_physique < reorder_point:
+        qte = int(reorder_point - stock_physique)
         c4.error(f"🚨 CMD : {qte}")
         st.download_button(f"📥 Générer Bon {choix_produit}", generer_pdf(choix_produit, qte, delai_total), f"Moana_{choix_produit}.pdf")
     else:
@@ -251,4 +283,4 @@ if check_password():
     st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
-    st.caption("© 2026 Moana Logistics | V3.0 Secure Edition | tomolostboard-sys")
+    st.caption("© 2026 Moana Logistics | V3.1 Persistance Edition | tomolostboard-sys")
