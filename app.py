@@ -36,11 +36,17 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- FONCTION MÉTÉO RÉELLE (TahitI) ---
+# --- FONCTION MÉTÉO RÉELLE (Connexion Satellite Papeete) ---
 def get_tahiti_weather():
-    # Coordonnées de Papeete : -17.53, -149.56
-    # Pour l'instant on garde le simulateur interne, prêt pour l'API
-    return 1 if st.sidebar.checkbox("Activer Flux Météo Direct", value=False) else 0
+    try:
+        # Coordonnées de Papeete
+        url = "https://api.open-meteo.com/v1/forecast?latitude=-17.53&longitude=-149.56&current_weather=true"
+        response = requests.get(url, timeout=5).json()
+        code = response['current_weather']['weathercode']
+        # Codes 51+ correspondent à la pluie ou aux orages
+        return 1 if code >= 51 else 0
+    except:
+        return 0
 
 # --- FONCTION GÉNÉRATION PDF ---
 def generer_pdf(produit, quantite, delai):
@@ -64,19 +70,14 @@ def generer_pdf(produit, quantite, delai):
 # --- LOGIQUE CORE : LE MOTEUR DE DÉCISION ---
 def engine_ia_pro(data, horizon, weather, event, calendar_impact):
     df_train = data.copy()
-    # Gestion des nans pour le lag
     df_train['lag_1'] = df_train['ventes'].shift(1).fillna(df_train['ventes'].mean())
-    
     X = df_train[['jour', 'meteo', 'evenement', 'lag_1', 'impact_attendu']].values
     y = df_train['ventes'].values
-    
     model = GradientBoostingRegressor(n_estimators=300, learning_rate=0.05, max_depth=6)
     model.fit(X, y)
-    
     last_sales = y[-1]
     preds = []
     current_day = df_train['jour'].max()
-    
     for i in range(horizon):
         current_day += 1
         p = model.predict([[current_day, weather, event, last_sales, calendar_impact]])[0]
@@ -93,8 +94,16 @@ with st.sidebar:
     uploaded_file = st.file_uploader("Importer CSV", type="csv")
     st.divider()
     st.header("🌡️ PARAMÈTRES")
-    lead_time = st.number_input("Délai Livraison (Jours)", value=10)
+    lead_time = st.number_input("Délai Livraison Normal (Jours)", value=10)
     service_level = st.select_slider("Niveau de Sécurité", options=[0.80, 0.90, 0.95, 0.99], value=0.95)
+    
+    st.divider()
+    st.header("🚢 LOGISTIQUE")
+    retard_bateau = st.slider("Retard Transport (Jours)", 0, 20, 0)
+    
+    st.divider()
+    st.header("🌦️ FACTEURS EXTERNES")
+    flux_direct = st.checkbox("Activer Flux Météo Direct", value=False)
     sim_meteo = st.checkbox("Simuler Pluie Forte", value=False)
     sim_event = st.checkbox("Événement / Promo", value=False)
 
@@ -118,19 +127,26 @@ for p in data['produit'].unique():
         st.markdown(f"---")
         st.markdown(f"### 📦 Analyse de Stock : {p}")
         
-        # Météo : On croise le simulateur et le flux réel
-        meteo_active = 1 if (sim_meteo or get_tahiti_weather()) else 0
+        # Météo : Fusion entre simulateur et flux satellite
+        meteo_active = 1 if (sim_meteo or (flux_direct and get_tahiti_weather())) else 0
         
-        preds = engine_ia_pro(df_p, 14, meteo_active, 1 if sim_event else 0, 1.5 if sim_event else 1.0)
-        total_pred = sum(preds[:lead_time])
+        # Ajustement du délai total (Lead time + Retard)
+        delai_total = lead_time + retard_bateau
         
+        # Prédiction IA (horizon de 21 jours pour couvrir les retards)
+        preds = engine_ia_pro(df_p, 21, meteo_active, 1 if sim_event else 0, 1.5 if sim_event else 1.0)
+        total_pred = sum(preds[:delai_total])
+        
+        # Calcul du Stock de Sécurité ajusté au nouveau délai
         std_dev = np.std(df_p['ventes'])
         z_score = {0.80: 1.28, 0.90: 1.64, 0.95: 1.96, 0.99: 2.33}[service_level]
-        safety_stock = z_score * std_dev * np.sqrt(lead_time)
+        safety_stock = z_score * std_dev * np.sqrt(delai_total)
+        
+        # Point de commande
         reorder_point = total_pred + safety_stock
         
-        # On déplace la gestion du stock dans la colonne pour chaque produit
-        stock_actuel = st.number_input(f"Stock Physique Actuel ({p})", value=350)
+        # Gestion dynamique du stock
+        stock_actuel = st.number_input(f"Stock Physique Actuel ({p})", value=350, key=f"stock_{p}")
         
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("DEMANDE PRÉVUE", f"{int(total_pred)} un.")
@@ -141,7 +157,7 @@ for p in data['produit'].unique():
             qte = int(reorder_point - stock_actuel)
             c4.error(f"⚠️ COMMANDE : {qte}")
             
-            pdf_bytes = generer_pdf(p, qte, lead_time)
+            pdf_bytes = generer_pdf(p, qte, delai_total)
             st.download_button(
                 label=f"📄 Générer Bon de Commande - {p}",
                 data=pdf_bytes,
@@ -154,7 +170,7 @@ for p in data['produit'].unique():
         # Graphique
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df_p['jour'], y=df_p['ventes'], name="Historique", line=dict(color='#00ffcc', width=3)))
-        fig.add_trace(go.Scatter(x=list(range(df_p['jour'].max()+1, df_p['jour'].max()+15)), y=preds, name="Prédiction IA", line=dict(dash='dot', color='#ff0066', width=3)))
+        fig.add_trace(go.Scatter(x=list(range(df_p['jour'].max()+1, df_p['jour'].max()+15)), y=preds[:14], name="Prédiction IA", line=dict(dash='dot', color='#ff0066', width=3)))
         
         fig.update_layout(
             template="plotly_dark", 
