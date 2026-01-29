@@ -85,26 +85,34 @@ def engine_ia_pro(data, horizon, weather, event, calendar_impact):
         last_sales = p 
     return preds
 
-# --- SIDEBAR & IMPORTATION BLINDÉE ---
+# --- SIDEBAR & DESIGN CUSTOM ---
 with st.sidebar:
-    st.image("https://www.pngall.com/wp-content/uploads/2/Ship-PNG-Clipart.png", width=100)
-    st.header("🎛️ PILOTAGE GLOBAL")
-    lead_time = st.number_input("Délai Livraison (Jours)", value=10)
-    retard_bateau = st.slider("Retard Bateau (Jours)", 0, 15, 0)
-    service_level = st.select_slider("Taux de Service", options=[0.80, 0.90, 0.95, 0.99], value=0.95)
+    st.markdown("""
+        <div style='text-align: center;'>
+            <h1 style='color: #00ffcc; font-size: 1.5em;'>MOANA 🚢</h1>
+            <p style='color: #888; font-size: 0.8em; letter-spacing: 2px;'>LOGISTICS SOLUTIONS</p>
+        </div>
+    """, unsafe_allow_html=True)
     
     st.divider()
-    st.header("📂 IMPORTATION DONNÉES")
-    uploaded_file = st.file_uploader("Charger Ventes (Excel ou CSV)", type=['csv', 'xlsx'])
+    
+    with st.expander("⚙️ PARAMÈTRES RÉSEAU", expanded=True):
+        lead_time = st.number_input("Délai Livraison (Jours)", value=10)
+        retard_bateau = st.slider("Retard Bateau (Jours)", 0, 15, 0)
+        service_level = st.select_slider("Taux de Service", options=[0.80, 0.90, 0.95, 0.99], value=0.95)
+    
+    st.divider()
+    st.header("📂 DONNÉES")
+    uploaded_file = st.file_uploader("Ventes (Excel/CSV)", type=['csv', 'xlsx'])
     
     # Bouton de modèle
     template_data = pd.DataFrame({'jour': [1], 'produit': ['Riz'], 'ventes': [50], 'meteo': [0], 'evenement': [0], 'impact_attendu': [1.0]})
-    st.download_button("📥 Modèle CSV", template_data.to_csv(index=False).encode('utf-8'), "modele_moana.csv", "text/csv")
+    st.download_button("📥 Modèle Import", template_data.to_csv(index=False).encode('utf-8'), "modele_moana.csv", "text/csv")
     
     st.divider()
-    st.header("🌦️ EXTERNE")
-    flux_direct = st.checkbox("Météo Direct (Papeete)", value=True)
-    sim_event = st.checkbox("Campagne Promo", value=False)
+    with st.expander("🌦️ FACTEURS EXTERNES"):
+        flux_direct = st.checkbox("Météo Direct (Papeete)", value=True)
+        sim_event = st.checkbox("Campagne Promo", value=False)
 
 # --- PRÉPARATION DES DONNÉES ---
 produits_catalogue = ['Riz Parfumé 5kg', 'Farine T45', 'Sucre Blanc 1kg']
@@ -126,6 +134,7 @@ if uploaded_file is not None:
         data = df_brut.dropna(subset=['ventes', 'produit'])
         data['ventes'] = pd.to_numeric(data['ventes'], errors='coerce').fillna(0)
         produits_catalogue = data['produit'].unique().tolist()
+        st.sidebar.success("✅ Données chargées")
     except Exception as e:
         st.sidebar.error(f"Erreur : {e}")
         uploaded_file = None
@@ -167,42 +176,45 @@ st.divider()
 choix_produit = st.selectbox("🔍 ANALYSE PAR RÉFÉRENCE", produits_catalogue)
 df_p = data[data['produit'] == choix_produit].copy()
 
-# --- ÉTAPE 13 : DATA GUARD (ANOMALIES) ---
+# --- DATA GUARD (ANOMALIES) ---
 moyenne = df_p['ventes'].mean()
 std_dev_p = df_p['ventes'].std()
 seuil_max = moyenne + (3 * std_dev_p)
 anomalies = df_p[df_p['ventes'] > seuil_max]
 
 if not anomalies.empty:
-    st.warning(f"⚠️ **DATA GUARD** : {len(anomalies)} pic(s) de vente détecté(s). L'IA a lissé ces valeurs pour la prévision.")
+    st.warning(f"⚠️ **DATA GUARD** : {len(anomalies)} pic(s) de vente détecté(s). Lissage activé.")
     df_p.loc[df_p['ventes'] > seuil_max, 'ventes'] = seuil_max
 
+# --- CALCULS AVEC ANIMATION ---
 meteo_active = get_tahiti_weather() if flux_direct else 0
-preds = engine_ia_pro(df_p, 21, meteo_active, 1 if sim_event else 0, 1.5 if sim_event else 1.0)
+with st.spinner('🌊 L\'IA Moana analyse les courants de ventes...'):
+    preds = engine_ia_pro(df_p, 21, meteo_active, 1 if sim_event else 0, 1.5 if sim_event else 1.0)
 
 total_pred = sum(preds[:delai_total])
 safety_stock = np.std(df_p['ventes']) * {0.80: 1.28, 0.90: 1.64, 0.95: 1.96, 0.99: 2.33}[service_level] * np.sqrt(delai_total)
 reorder_point = total_pred + safety_stock
 
 st.markdown(f"## 📦 Focus : {choix_produit}")
-stock_actuel = st.number_input(f"Stock Physique : {choix_produit}", value=300, key=f"in_{choix_produit}")
+stock_actuel = st.number_input(f"Ajuster Stock Physique : {choix_produit}", value=300, key=f"in_{choix_produit}")
 
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("BESOIN IA", f"{int(total_pred)} u.")
+c1.metric("BESOIN PRÉVU", f"{int(total_pred)} u.")
 c2.metric("SÉCURITÉ", f"{int(safety_stock)} u.")
-c3.metric("ALERTE", f"{int(reorder_point)} u.")
+c3.metric("POINT D'ALERTE", f"{int(reorder_point)} u.")
 
 if stock_actuel < reorder_point:
     qte = int(reorder_point - stock_actuel)
     c4.error(f"🚨 CMD : {qte}")
-    st.download_button(f"📥 Bon de Commande", generer_pdf(choix_produit, qte, delai_total), f"Moana_{choix_produit}.pdf")
+    st.download_button(f"📥 Générer Bon {choix_produit}", generer_pdf(choix_produit, qte, delai_total), f"Moana_{choix_produit}.pdf")
 else:
-    c4.success("✅ OK")
+    c4.success("✅ STOCK OPTIMAL")
 
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=df_p['jour'], y=df_p['ventes'], name="Réel (Lissé)", line=dict(color='#00ffcc', width=4)))
-fig.add_trace(go.Scatter(x=list(range(31, 46)), y=preds[:15], name="IA", line=dict(dash='dot', color='#ff0066', width=4)))
-fig.update_layout(template="plotly_dark", height=400)
+fig.add_trace(go.Scatter(x=df_p['jour'], y=df_p['ventes'], name="Historique", line=dict(color='#00ffcc', width=4)))
+fig.add_trace(go.Scatter(x=list(range(31, 46)), y=preds[:15], name="Prévision IA", line=dict(dash='dot', color='#ff0066', width=4)))
+fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0))
 st.plotly_chart(fig, use_container_width=True)
 
-st.caption("© 2026 Moana Logistics | V2.1 Data Guard Activated | tomolostboard-sys")
+st.divider()
+st.caption("© 2026 Moana Logistics | V2.2 Custom Edition | tomolostboard-sys")
