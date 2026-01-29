@@ -71,13 +71,14 @@ if check_password():
 
     st.set_page_config(page_title="MOANA LOGISTICS - COMMAND CENTER", layout="wide", page_icon="🌊")
 
-    # --- DESIGN CSS ---
+    # --- DESIGN CSS OPTIMISÉ TERRAIN ---
     st.markdown("""
         <style>
         .main { background: linear-gradient(180deg, #0e1117 0%, #1e2130 100%); color: white; }
         .stMetric { background-color: rgba(30, 33, 48, 0.7); padding: 20px; border-radius: 15px; border: 1px solid rgba(0, 255, 204, 0.3); }
         h1 { color: #00ffcc; font-family: 'Helvetica Neue', sans-serif; letter-spacing: 2px; text-transform: uppercase; }
-        .stButton>button { background: linear-gradient(90deg, #00ffcc 0%, #0099ff 100%); color: black; font-weight: bold; }
+        .stButton>button { background: linear-gradient(90deg, #00ffcc 0%, #0099ff 100%); color: black; font-weight: bold; width: 100%; border-radius: 10px; height: 3em; }
+        .inventory-card { background: rgba(255,255,255,0.05); padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid #00ffcc; }
         </style>
         """, unsafe_allow_html=True)
 
@@ -102,8 +103,6 @@ if check_password():
         pdf.ln(20)
         pdf.set_font("Arial", 'I', 10)
         pdf.cell(200, 10, "Document certifie par le systeme Moana AI.", ln=True)
-        
-        # Action de Log
         log_commande(produit, quantite)
         return pdf.output(dest='S').encode('latin-1')
 
@@ -143,7 +142,6 @@ if check_password():
             data = pd.read_excel(uploaded_file)
         else:
             data = pd.read_csv(uploaded_file, sep=None, engine='python')
-        # Mapping automatique
         for col in data.columns:
             if col.lower() in ['ventes', 'qty']: data = data.rename(columns={col: 'ventes'})
             if col.lower() in ['produit', 'item']: data = data.rename(columns={col: 'produit'})
@@ -159,50 +157,72 @@ if check_password():
     if 'stocks_moana' not in st.session_state:
         st.session_state['stocks_moana'] = charger_stocks_locaux(produits_catalogue)
 
-    # --- NAVIGATION PAR ONGLETS ---
-    tab_command, tab_history = st.tabs(["🚀 COMMAND CENTER", "📜 JOURNAL DE BORD"])
+    # --- NAVIGATION PAR ONGLETS (V4 : Ajout Inventaire Rapide) ---
+    tab_field, tab_command, tab_history = st.tabs(["📦 INVENTAIRE RAPIDE", "🚀 COMMAND CENTER", "📜 JOURNAL"])
 
+    # --- ONGLET 1 : INVENTAIRE TERRAIN ---
+    with tab_field:
+        st.subheader("📲 Mise à jour Stocks (Mode Terrain)")
+        st.info("Saisissez les stocks réels constatés en entrepôt.")
+        
+        for prod in produits_catalogue:
+            with st.container():
+                col_info, col_input = st.columns([2, 1])
+                val_actuelle = st.session_state['stocks_moana'].get(prod, 0)
+                
+                # Calcul rapide du seuil pour l'alerte visuelle
+                df_alert = data[data['produit'] == prod]
+                seuil_visuel = df_alert['ventes'].mean() * (lead_time + retard_bateau)
+                color = "#ff4b4b" if val_actuelle < seuil_visuel else "#00ffcc"
+
+                col_info.markdown(f"""
+                    <div class='inventory-card' style='border-left-color: {color}'>
+                        <b>{prod}</b><br>
+                        <small>Dernier stock: {val_actuelle} u.</small>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+                nouveau_stock = col_input.number_input("Réel", value=int(val_actuelle), key=f"inv_{prod}", label_visibility="collapsed")
+                
+                if nouveau_stock != val_actuelle:
+                    st.session_state['stocks_moana'][prod] = nouveau_stock
+                    sauvegarder_stock(prod, nouveau_stock)
+                    st.toast(f"✅ {prod} mis à jour", icon="💾")
+
+    # --- ONGLET 2 : ANALYSE IA ---
     with tab_command:
         st.title("🌊 MOANA COMMAND CENTER")
-        
-        # Radar
         delai_total = lead_time + retard_bateau
-        
         choix_produit = st.selectbox("🔍 Sélectionner une référence", produits_catalogue)
         df_p = data[data['produit'] == choix_produit].copy()
 
-        # Persistance du Stock
-        val_init = int(st.session_state['stocks_moana'].get(choix_produit, 300))
-        stock_physique = st.number_input(f"Stock Réel : {choix_produit}", value=val_init)
-        if stock_physique != val_init:
-            st.session_state['stocks_moana'][choix_produit] = stock_physique
-            sauvegarder_stock(choix_produit, stock_physique)
-            st.toast("Stock sauvegardé !", icon="💾")
+        # Rappel du stock
+        stock_reel = st.session_state['stocks_moana'].get(choix_produit, 0)
+        st.write(f"Stock actuel : **{stock_reel} units**")
 
-        # Calcul IA
         with st.spinner('IA en cours...'):
             preds = engine_ia_pro(df_p, 21, get_tahiti_weather(), 0, 1.0)
         
         reorder_point = sum(preds[:delai_total]) + (df_p['ventes'].std() * 1.96 * np.sqrt(delai_total))
 
         c1, c2, c3 = st.columns(3)
-        c1.metric("POINT D'ALERTE", f"{int(reorder_point)} u.")
-        c2.metric("PRÉVISION ({}) J".format(delai_total), f"{int(sum(preds[:delai_total]))} u.")
+        c1.metric("SEUIL ALERTE", f"{int(reorder_point)} u.")
+        c2.metric("BESOIN PRÉVU", f"{int(sum(preds[:delai_total]))} u.")
         
-        if stock_physique < reorder_point:
-            qte = int(reorder_point - stock_physique)
+        if stock_reel < reorder_point:
+            qte = int(reorder_point - stock_reel)
             c3.error(f"🚨 CMD : {qte}")
-            st.download_button("📥 Générer & Logger le Bon", generer_pdf(choix_produit, qte, delai_total), f"Moana_{choix_produit}.pdf")
+            st.download_button("📥 Télécharger le Bon", generer_pdf(choix_produit, qte, delai_total), f"Moana_{choix_produit}.pdf")
         else:
             c3.success("✅ STOCK OK")
 
-        # Graphique
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df_p['jour'], y=df_p['ventes'], name="Historique", line=dict(color='#00ffcc', width=3)))
         fig.add_trace(go.Scatter(x=list(range(31, 46)), y=preds[:15], name="Futur IA", line=dict(dash='dot', color='#ff0066', width=3)))
-        fig.update_layout(template="plotly_dark", height=400)
+        fig.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,b=0,t=20))
         st.plotly_chart(fig, use_container_width=True)
 
+    # --- ONGLET 3 : JOURNAL ---
     with tab_history:
         st.subheader("📋 Historique des Commandes")
         if os.path.exists(LOG_FILE):
@@ -212,7 +232,7 @@ if check_password():
                 os.remove(LOG_FILE)
                 st.rerun()
         else:
-            st.info("Aucune commande dans le journal pour le moment.")
+            st.info("Aucune commande générée.")
 
     st.divider()
-    st.caption("© 2026 Moana Logistics | V3.2 The Beast Edition | tomolostboard-sys")
+    st.caption("© 2026 Moana Logistics | V4.0 Field-Ready Edition | tomolostboard-sys")
