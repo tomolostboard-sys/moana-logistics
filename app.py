@@ -108,14 +108,14 @@ with st.sidebar:
     flux_direct = st.checkbox("Météo Direct (Papeete)", value=True)
     sim_event = st.checkbox("Campagne Promo", value=False)
 
-# Données simulées
+# Données simulées (Corrigées : 30 valeurs pour chaque colonne)
 data = pd.DataFrame({
     'jour': range(1, 31),
     'ventes': [np.random.randint(40, 100) + (i*1.1) for i in range(30)],
     'meteo': [np.random.choice([0, 1]) for _ in range(30)],
-    'evenement': [0]*29 + [1 if sim_event else 0],
+    'evenement': [0]*30,
     'impact_attendu': [1.5 if sim_event else 1.0]*30,
-    'produit': ['Riz Parfumé 5kg']
+    'produit': ['Riz Parfumé 5kg'] * 30  # On répète le nom 30 fois
 })
 
 # --- ANALYSE ---
