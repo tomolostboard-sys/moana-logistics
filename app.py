@@ -6,9 +6,35 @@ import plotly.graph_objects as go
 from fpdf import FPDF
 import os
 
-# --- CONFIGURATION ÉLITE ---
-st.set_page_config(page_title="MOANA LOGISTICS - COMMAND CENTER", layout="wide")
-st.markdown("""<style> .main { background-color: #0e1117; color: white; } </style>""", unsafe_allow_html=True)
+# --- CONFIGURATION ÉLITE & DESIGN ---
+st.set_page_config(page_title="MOANA LOGISTICS - COMMAND CENTER", layout="wide", page_icon="🌊")
+
+# Injection CSS pour un look haut de gamme
+st.markdown("""
+    <style>
+    .stMetric {
+        background-color: #1e2130;
+        padding: 15px;
+        border-radius: 10px;
+        border-left: 5px solid #00ffcc;
+    }
+    .main {
+        background-color: #0e1117;
+    }
+    h1 {
+        color: #00ffcc;
+        text-shadow: 2px 2px #000;
+    }
+    .stButton>button {
+        width: 100%;
+        border-radius: 5px;
+        height: 3em;
+        background-color: #00ffcc;
+        color: black;
+        font-weight: bold;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 # --- FONCTION GÉNÉRATION PDF ---
 def generer_pdf(produit, quantite, delai):
@@ -50,7 +76,7 @@ def engine_ia_pro(data, horizon, weather, event, calendar_impact):
 
 # --- INTERFACE DE COMMANDEMENT ---
 st.title("🛡️ MOANA COMMAND CENTER v1.6")
-st.write("Prescription Logistique & Génération de Commandes")
+st.write(f"📍 **Statut du système :** Opérationnel | **Localisation :** Papeete, Tahiti")
 
 with st.sidebar:
     st.header("📥 DATA FEED")
@@ -79,7 +105,7 @@ else:
 for p in data['produit'].unique():
     df_p = data[data['produit'] == p]
     with st.container():
-        st.subheader(f"📦 Analyse : {p}")
+        st.markdown(f"### 📦 Analyse de Stock : {p}")
         
         preds = engine_ia_pro(df_p, 14, 1 if sim_meteo else 0, 1 if sim_event else 0, 1.5 if sim_event else 1.0)
         total_pred = sum(preds[:lead_time])
@@ -89,31 +115,40 @@ for p in data['produit'].unique():
         safety_stock = z_score * std_dev * np.sqrt(lead_time)
         reorder_point = total_pred + safety_stock
         
-        stock_actuel = 350 # Simulé
+        stock_actuel = 350 # Valeur simulée
         
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Demande Prévue", f"{int(total_pred)} un.")
-        c2.metric("Stock de Sécurité", f"{int(safety_stock)} un.")
-        c3.metric("Point de Commande", f"{int(reorder_point)} un.")
+        c1.metric("DEMANDE PRÉVUE", f"{int(total_pred)} un.")
+        c2.metric("STOCK SÉCURITÉ", f"{int(safety_stock)} un.")
+        c3.metric("POINT DE COMMANDE", f"{int(reorder_point)} un.")
         
         if stock_actuel < reorder_point:
             qte = int(reorder_point - stock_actuel)
-            c4.error(f"COMMANDE : {qte}")
+            c4.error(f"⚠️ COMMANDE : {qte}")
             
             # BOUTON PDF MAGIQUE
             pdf_bytes = generer_pdf(p, qte, lead_time)
             st.download_button(
-                label=f"📄 Télécharger le Bon de Commande - {p}",
+                label=f"📄 Générer Bon de Commande - {p}",
                 data=pdf_bytes,
                 file_name=f"commande_moana_{p}.pdf",
                 mime="application/pdf"
             )
         else:
-            c4.success("STOCK OK")
+            c4.success("✅ STOCK OPTIMAL")
 
         # Graphique
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df_p['jour'], y=df_p['ventes'], name="Réel", line=dict(color='#00ffcc')))
-        fig.add_trace(go.Scatter(x=list(range(df_p['jour'].max()+1, df_p['jour'].max()+15)), y=preds, name="IA", line=dict(dash='dot', color='#ff0066')))
-        fig.update_layout(template="plotly_dark", height=300)
+        fig.add_trace(go.Scatter(x=df_p['jour'], y=df_p['ventes'], name="Historique", line=dict(color='#00ffcc', width=3)))
+        fig.add_trace(go.Scatter(x=list(range(df_p['jour'].max()+1, df_p['jour'].max()+15)), y=preds, name="Prédiction IA", line=dict(dash='dot', color='#ff0066', width=3)))
+        
+        fig.update_layout(
+            template="plotly_dark", 
+            height=350,
+            margin=dict(l=20, r=20, t=30, b=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
         st.plotly_chart(fig, use_container_width=True)
+
+st.divider()
+st.caption("Moana Logistics Engine v1.6 | Algorithme : Gradient Boosting Regressor | Propriété de tomolostboard-sys")
