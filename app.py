@@ -97,7 +97,7 @@ with st.sidebar:
     flux_direct = st.checkbox("Météo Direct (Papeete)", value=True)
     sim_event = st.checkbox("Campagne Promo", value=False)
 
-# --- GÉNÉRATION DU CATALOGUE (ÉTAPE 9) ---
+# --- GÉNÉRATION DU CATALOGUE ---
 produits_catalogue = ['Riz Parfumé 5kg', 'Farine T45', 'Sucre Blanc 1kg']
 all_data = []
 for prod in produits_catalogue:
@@ -117,16 +117,40 @@ data = pd.concat(all_data)
 st.title("🌊 MOANA COMMAND CENTER")
 st.write(f"🌐 **Logistics Intelligence System** | Polynésie Française")
 
+# --- ÉTAPE 10 : RADAR D'ALERTE GLOBAL ---
+st.subheader("📡 RADAR DES STOCKS (VUE D'ENSEMBLE)")
+delai_total = lead_time + retard_bateau
+etat_stocks = []
+
+for prod in produits_catalogue:
+    df_temp = data[data['produit'] == prod]
+    vitesse_vente = df_temp['ventes'].tail(7).mean()
+    besoin_ia = vitesse_vente * delai_total
+    securite = np.std(df_temp['ventes']) * 1.96 * np.sqrt(delai_total)
+    seuil_alerte = besoin_ia + securite
+    
+    # Récupération du stock en mémoire vive
+    s_actuel = st.session_state.get(f"in_{prod}", 300)
+    
+    statut = "🔴 COMMANDE REQUISE" if s_actuel < seuil_alerte else "🟢 OK"
+    etat_stocks.append({
+        "Produit": prod,
+        "Stock Actuel": int(s_actuel),
+        "Seuil d'Alerte (Point de Commande)": int(seuil_alerte),
+        "Statut": statut
+    })
+
+st.table(pd.DataFrame(etat_stocks))
+
 # --- SÉLECTEUR DE RÉFÉRENCE ---
 st.divider()
-choix_produit = st.selectbox("🔍 SÉLECTIONNER UNE RÉFÉRENCE DANS LE CATALOGUE", produits_catalogue)
+choix_produit = st.selectbox("🔍 ANALYSE DÉTAILLÉE PAR RÉFÉRENCE", produits_catalogue)
 
-# Filtrage des données pour le produit choisi
+# Filtrage pour le produit choisi
 df_p = data[data['produit'] == choix_produit]
 
-# --- ANALYSE & CALCULS ---
+# --- ANALYSE & CALCULS DÉTAILLÉS ---
 meteo_active = get_tahiti_weather() if flux_direct else 0
-delai_total = lead_time + retard_bateau
 preds = engine_ia_pro(df_p, 21, meteo_active, 1 if sim_event else 0, 1.5 if sim_event else 1.0)
 
 total_pred = sum(preds[:delai_total])
@@ -135,30 +159,28 @@ z_score = {0.80: 1.28, 0.90: 1.64, 0.95: 1.96, 0.99: 2.33}[service_level]
 safety_stock = z_score * std_dev * np.sqrt(delai_total)
 reorder_point = total_pred + safety_stock
 
-# Interface de Stock
 st.markdown(f"## 📦 Focus : {choix_produit}")
-# On utilise session_state pour garder le stock en mémoire lors du changement de produit
-stock_actuel = st.number_input(f"Saisir Stock Physique pour {choix_produit}", value=300, key=f"in_{choix_produit}")
+stock_actuel = st.number_input(f"Ajuster Stock Physique : {choix_produit}", value=300, key=f"in_{choix_produit}")
 
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("BESOIN IA (Période)", f"{int(total_pred)} u.")
-c2.metric("SÉCURITÉ", f"{int(safety_stock)} u.")
+c1.metric("BESOIN PRÉVU (IA)", f"{int(total_pred)} u.")
+c2.metric("STOCK SÉCURITÉ", f"{int(safety_stock)} u.")
 c3.metric("POINT D'ALERTE", f"{int(reorder_point)} u.")
 
 if stock_actuel < reorder_point:
     qte_commande = int(reorder_point - stock_actuel)
     c4.error(f"🚨 COMMANDE : {qte_commande}")
     pdf_bytes = generer_pdf(choix_produit, qte_commande, delai_total)
-    st.download_button(f"📥 Télécharger Bon de Commande", pdf_bytes, f"Moana_{choix_produit}.pdf")
+    st.download_button(f"📥 Télécharger Bon - {choix_produit}", pdf_bytes, f"Moana_{choix_produit}.pdf")
 else:
     c4.success("✅ STOCK OPTIMAL")
 
-# Graphique futuriste
+# Graphique
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=df_p['jour'], y=df_p['ventes'], name="Ventes Réelles", line=dict(color='#00ffcc', width=4)))
+fig.add_trace(go.Scatter(x=df_p['jour'], y=df_p['ventes'], name="Historique", line=dict(color='#00ffcc', width=4)))
 fig.add_trace(go.Scatter(x=list(range(31, 46)), y=preds[:15], name="IA Prévision", line=dict(dash='dot', color='#ff0066', width=4)))
 fig.update_layout(template="plotly_dark", height=400, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
 st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
-st.caption("© 2026 Moana Logistics | Algorithme : Gradient Boosting Regressor | tomolostboard-sys")
+st.caption("© 2026 Moana Logistics | V1.0 Command Center | Algorithme : Gradient Boosting | tomolostboard-sys")
