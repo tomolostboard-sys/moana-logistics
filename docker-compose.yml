@@ -1,0 +1,14 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: moana
+      POSTGRES_USER: moana
+      POSTGRES_PASSWORD: Moana2026
+    ports:
+      - "5433:5432"
+    volumes:
+      - moana_pg:/var/lib/postgresql/data
+
+volumes:
+  moana_pg:
