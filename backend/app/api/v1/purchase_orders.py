@@ -17,7 +17,7 @@ from backend.app.db.models.models_v1 import (
     Shipment,
 )
 from backend.app.db.models.core_types import POStatus
-from backend.app.services.inventory import rebuild_qty_on_order
+from backend.app.services.inventory_service import rebuild_qty_on_order
 
 router = APIRouter(prefix="/purchase-orders")
 
@@ -88,14 +88,12 @@ def get_po(po_id: int, db: Session = Depends(get_db)):
 
 @router.post("")
 def create_po(payload: POCreate, db: Session = Depends(get_db)):
-    # Unique PO number
     exists = db.execute(
         select(PurchaseOrder).where(PurchaseOrder.po_number == payload.po_number)
     ).scalar_one_or_none()
     if exists:
         raise HTTPException(status_code=409, detail="PO number already exists")
 
-    # FK checks (fail fast, message clair)
     if not db.get(Supplier, payload.supplier_id):
         raise HTTPException(status_code=400, detail="Invalid supplier_id")
     if not db.get(Site, payload.site_id):
@@ -103,7 +101,6 @@ def create_po(payload: POCreate, db: Session = Depends(get_db)):
     if payload.shipment_id is not None and not db.get(Shipment, payload.shipment_id):
         raise HTTPException(status_code=400, detail="Invalid shipment_id")
 
-    # Validate products in lines
     for ln in payload.lines:
         if not db.get(Product, ln.product_id):
             raise HTTPException(status_code=400, detail=f"Invalid product_id {ln.product_id}")
@@ -117,7 +114,7 @@ def create_po(payload: POCreate, db: Session = Depends(get_db)):
         shipment_id=payload.shipment_id,
     )
     db.add(po)
-    db.flush()  # get po.id
+    db.flush()
 
     for ln in payload.lines:
         db.add(
@@ -140,17 +137,15 @@ def approve_po(po_id: int, db: Session = Depends(get_db)):
     if not po:
         raise HTTPException(status_code=404, detail="PO not found")
 
-    # Interdictions
     if po.status in (POStatus.cancelled, POStatus.closed):
         raise HTTPException(status_code=400, detail="PO cannot be approved")
 
-    # Idempotent : si déjà approuvé (ou plus loin), on ne casse rien
     if po.status != POStatus.draft:
         return {"id": po.id, "status": po.status}
 
     po.status = POStatus.approved
     po.approved_at = datetime.utcnow()
-    po.approved_by = 1  # TODO: remplacer par user courant quand auth OK
+    po.approved_by = 1  # TODO: user courant
     db.flush()
 
     lines = (
@@ -158,9 +153,13 @@ def approve_po(po_id: int, db: Session = Depends(get_db)):
         .scalars()
         .all()
     )
-    product_ids = [l.product_id for l in lines]
 
-    rebuild_qty_on_order(db, site_id=int(po.site_id), product_ids=product_ids)
+    for line in lines:
+        rebuild_qty_on_order(
+            db,
+            product_id=line.product_id,
+            site_id=int(po.site_id),
+        )
 
     db.commit()
     return {"id": po.id, "status": po.status}

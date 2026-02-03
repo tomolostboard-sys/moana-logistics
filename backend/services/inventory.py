@@ -16,13 +16,26 @@ from backend.app.db.models.models_v1 import (
 from backend.app.db.models.core_types import LocationType, POStatus, ReceiptStatus
 
 
-ENGAGED_PO_STATUSES = {POStatus.approved, POStatus.shipped, POStatus.partial}
-# Optionnel si tu veux inclure closed :
-# ENGAGED_PO_STATUSES = {POStatus.approved, POStatus.shipped, POStatus.partial, POStatus.closed}
+# PO réellement engagés dans le "on order"
+ENGAGED_PO_STATUSES = {
+    POStatus.approved,
+    POStatus.shipped,
+    POStatus.partial,
+}
+# Si un jour tu veux inclure closed :
+# ENGAGED_PO_STATUSES = {
+#     POStatus.approved,
+#     POStatus.shipped,
+#     POStatus.partial,
+#     POStatus.closed,
+# }
 
 
 def get_inbound_dock_location_id(db: Session, site_id: int) -> int:
-    # Priorité au nom “TAH-DOCK” si tu veux bétonner la convention
+    """
+    Retourne l'id de la location DOCK inbound pour un site.
+    Priorité explicite à 'TAH-DOCK', sinon première DOCK trouvée.
+    """
     loc = (
         db.execute(
             select(Location)
@@ -36,7 +49,6 @@ def get_inbound_dock_location_id(db: Session, site_id: int) -> int:
     if loc:
         return int(loc.id)
 
-    # Sinon 1ère DOCK trouvée
     loc = (
         db.execute(
             select(Location)
@@ -48,22 +60,45 @@ def get_inbound_dock_location_id(db: Session, site_id: int) -> int:
         .first()
     )
     if not loc:
-        raise ValueError("No DOCK location found for this site (LocationType.dock)")
+        raise ValueError("No inbound DOCK location found for this site")
+
     return int(loc.id)
 
 
-def rebuild_qty_on_order(db: Session, site_id: int, product_ids: Iterable[int]) -> None:
-    product_ids = sorted({int(x) for x in product_ids if x is not None})
+def rebuild_qty_on_order(
+    db: Session,
+    *,
+    site_id: int,
+    product_ids: Iterable[int],
+) -> None:
+    """
+    Rebuild qty_on_order à partir des sources de vérité.
+
+    Règle métier :
+        qty_on_order =
+            SUM(qty_ordered sur PO engagés)
+            - SUM(qty_received - qty_damaged sur receipts POSTED)
+
+    Propriétés :
+    - déterministe
+    - idempotent
+    - transaction-safe
+    - verrouillage SQL (FOR UPDATE)
+    """
+
+    product_ids = sorted({int(pid) for pid in product_ids if pid is not None})
     if not product_ids:
         return
 
     dock_location_id = get_inbound_dock_location_id(db, site_id)
 
-    # Total commandé sur PO engagés
+    # ---------- COMMANDÉ ----------
     ordered_rows = db.execute(
         select(
             PurchaseOrderLine.product_id,
-            func.coalesce(func.sum(PurchaseOrderLine.qty_ordered), 0).label("ordered_qty"),
+            func.coalesce(func.sum(PurchaseOrderLine.qty_ordered), 0).label(
+                "ordered_qty"
+            ),
         )
         .join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderLine.po_id)
         .where(PurchaseOrder.site_id == site_id)
@@ -72,12 +107,16 @@ def rebuild_qty_on_order(db: Session, site_id: int, product_ids: Iterable[int]) 
         .group_by(PurchaseOrderLine.product_id)
     ).all()
 
-    # Total reçu sur GR — ✅ on compte uniquement les receipts POSTED
+    # ---------- REÇU (POSTED uniquement) ----------
     received_rows = db.execute(
         select(
             GoodsReceiptLine.product_id,
             func.coalesce(
-                func.sum(GoodsReceiptLine.qty_received - GoodsReceiptLine.qty_damaged), 0
+                func.sum(
+                    GoodsReceiptLine.qty_received
+                    - GoodsReceiptLine.qty_damaged
+                ),
+                0,
             ).label("received_qty"),
         )
         .join(GoodsReceipt, GoodsReceipt.id == GoodsReceiptLine.receipt_id)
@@ -92,6 +131,7 @@ def rebuild_qty_on_order(db: Session, site_id: int, product_ids: Iterable[int]) 
     ordered = {int(pid): int(qty) for pid, qty in ordered_rows}
     received = {int(pid): int(qty) for pid, qty in received_rows}
 
+    # ---------- UPSERT STOCK LEVEL ----------
     for pid in product_ids:
         outstanding = ordered.get(pid, 0) - received.get(pid, 0)
         if outstanding < 0:
